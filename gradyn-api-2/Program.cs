@@ -4,9 +4,10 @@ using gradyn_api_2.Services.DAL;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Begin services
 builder.Services.AddSingleton<INextcloudClient, NextcloudClient>(); // Made this a singleton to avoid scope mismatch issues
 builder.Services.AddSingleton<IGenericFormService, GenericFormService>();
-builder.Services.AddControllers();
+// End services
 
 // Begin CORS stuff
 var corsSection = builder.Configuration.GetSection("Cors");
@@ -37,6 +38,8 @@ builder.Services.AddCors(options =>
     });
 });
 // End CORS stuff
+
+builder.Services.AddControllers();
 
 var app = builder.Build();
 
