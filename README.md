@@ -1,0 +1,1 @@
+This is the (very WIP) V2 of the REST API I use for random projects that do not need an entire REST API of their own. It also currently contains the AutoAPI implementation until I get time to isolate that 
