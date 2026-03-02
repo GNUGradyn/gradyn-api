@@ -1,13 +1,21 @@
-﻿using gradyn_api_2.Models;
+﻿using System.Net.Http.Headers;
+using System.Text;
+using gradyn_api_2.Models;
 
 namespace gradyn_api_2.Services.DAL;
 
-public sealed class NextcloudClient(IConfiguration configuration) : INextcloudClient
+public sealed class NextcloudClient : INextcloudClient
 {
-    
     private readonly HttpClient _http = new();
-    private readonly Uri _webDavBase = new(config, $"remote.php/dav/files/{configuration["Nextcloud"]}");
-
+    private readonly Uri _webDavBase;
+    
+    public NextcloudClient(IConfiguration configuration)
+    {
+        _webDavBase = new Uri($"{configuration["Nextcloud:Server"]!.TrimEnd('/')}/remote.php/dav/files/{configuration["Nextcloud:Username"]}");
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{configuration["Nextcloud:Username"]}:{configuration["Nextcloud:Password"]}"));
+        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
+    }
+    
     /// <summary>
     /// Downloads a file as a stream and surfaces the server ETag (if provided)
     /// </summary>
@@ -15,10 +23,8 @@ public sealed class NextcloudClient(IConfiguration configuration) : INextcloudCl
         string remotePath,
         CancellationToken cancellationToken = default)
     {
-        var fileUri = new Uri(_webDavBase, remotePath);
-
         // ResponseHeadersRead so we don't buffer the whole file
-        using var request = new HttpRequestMessage(HttpMethod.Get, fileUri);
+        using var request = new HttpRequestMessage(HttpMethod.Get, GetUriFromRemotePath(remotePath));
 
         var response = await _http.SendAsync(
             request,
@@ -80,7 +86,7 @@ public sealed class NextcloudClient(IConfiguration configuration) : INextcloudCl
     {
         var fileUri = new Uri(_webDavBase, remotePath);
 
-        using var request = new HttpRequestMessage(HttpMethod.Put, fileUri);
+        using var request = new HttpRequestMessage(HttpMethod.Put, GetUriFromRemotePath(remotePath));
 
         request.Content = new StreamContent(content);
 
@@ -116,4 +122,6 @@ public sealed class NextcloudClient(IConfiguration configuration) : INextcloudCl
 
         return new NextcloudUploadResult(newEtag, length);
     }
+
+    private Uri GetUriFromRemotePath(string remotePath) => new Uri($"{_webDavBase.ToString().TrimEnd("/")}/{remotePath.TrimStart('/')}");
 }

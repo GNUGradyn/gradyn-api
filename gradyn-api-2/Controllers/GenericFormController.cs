@@ -45,6 +45,6 @@ public sealed class GenericFormController(IGenericFormService genericFormService
             return BadRequest("No usable fields.");
 
         await genericFormService.SubmitAsync(formKey, normalized, ct);
-        return Ok(new { ok = true });
+        return NoContent();
     }
 }

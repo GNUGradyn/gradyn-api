@@ -70,7 +70,6 @@ public class GenericFormService : IGenericFormService
         private readonly INextcloudClient _nextcloudClient;
 
         private readonly Channel<WorkItem> _channel;
-        private readonly Task _worker;
 
         public FormWriter(string remotePath, INextcloudClient nextcloudClient)
         {
@@ -84,7 +83,7 @@ public class GenericFormService : IGenericFormService
                 AllowSynchronousContinuations = false
             });
 
-            _worker = Task.Run(WorkerLoop);
+            Task.Run(WorkerLoop);
         }
 
         public async Task EnqueueAsync(IReadOnlyDictionary<string, string?> fields, CancellationToken ct)
