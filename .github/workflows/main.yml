@@ -27,6 +27,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
+          file: ./src/gradyn-api-2/Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ secrets.REGISTRY_ADDRESS }}/gradynapi:latest
