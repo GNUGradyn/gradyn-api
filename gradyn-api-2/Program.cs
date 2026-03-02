@@ -43,6 +43,7 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
+app.UseCors("Frontend");
 app.UseRouting();
 app.MapControllers();
 
