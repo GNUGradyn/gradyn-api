@@ -6,6 +6,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Begin services
 builder.Services.AddSingleton<INextcloudClient, NextcloudClient>(); // Made this a singleton to avoid scope mismatch issues
+builder.Services.AddScoped<IStaticUpdateService, StaticUpdateService>(); 
 builder.Services.AddSingleton<IGenericFormService, GenericFormService>();
 // End services
 
