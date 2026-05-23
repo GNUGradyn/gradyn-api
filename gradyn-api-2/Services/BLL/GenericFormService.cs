@@ -3,11 +3,12 @@ using System.Text;
 using System.Threading.Channels;
 using gradyn_api_2.Models;
 using gradyn_api_2.Services.DAL;
+using ClosedXML.Excel;
 
 namespace gradyn_api_2.Services.BLL;
 
 /// <summary>
-/// This service is for saving data to a CSV file in nextcloud. It tolerates concurrent submissions via a thread-safe
+/// This service is for saving data to a CSV or XLSX file in nextcloud. It tolerates concurrent submissions via a thread-safe
 /// channel queue.
 /// It also somewhat tolerates manual edits concurrent with the queue. This is done via an ETag and a 3-try retry policy.
 /// Since it just retries 3 times when there is an ETag conflict, I do not recommend using this for when cross-service
@@ -17,7 +18,7 @@ namespace gradyn_api_2.Services.BLL;
 /// </summary>
 public class GenericFormService : IGenericFormService
 {
-    private readonly IConfiguration _configuration;
+    private readonly Microsoft.Extensions.Configuration.IConfiguration _configuration;
     private readonly INextcloudClient _nextcloudClient;
 
     // Per-form writer queues/workers
@@ -25,14 +26,15 @@ public class GenericFormService : IGenericFormService
 
     private const int MaxETagRetries = 3;
 
-    public GenericFormService(IConfiguration configuration, INextcloudClient nextcloudClient)
+    public GenericFormService(Microsoft.Extensions.Configuration.IConfiguration configuration, INextcloudClient nextcloudClient)
     {
         _configuration = configuration;
         _nextcloudClient = nextcloudClient;
     }
 
     /// <summary>
-    /// Appends a CSV row for the given form key. The CSV header is read from the existing file on each submission.
+    /// Appends a row for the given form key. Supports CSV and XLSX files based on extension.
+    /// The header is read from the existing file on each submission.
     /// The submitted dictionary keys should match header names. Missing keys are written as empty cells.
     /// Extra keys are ignored.
     /// </summary>
@@ -106,7 +108,14 @@ public class GenericFormService : IGenericFormService
 
                 try
                 {
-                    await AppendWithRetriesAsync(item.Fields, item.CallerToken).ConfigureAwait(false);
+                    if (_remotePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await AppendXlsxWithRetriesAsync(item.Fields, item.CallerToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await AppendCsvWithRetriesAsync(item.Fields, item.CallerToken).ConfigureAwait(false);
+                    }
                     item.Tcs.TrySetResult();
                 }
                 catch (Exception ex)
@@ -116,7 +125,100 @@ public class GenericFormService : IGenericFormService
             }
         }
 
-        private async Task AppendWithRetriesAsync(IReadOnlyDictionary<string, string?> fields, CancellationToken ct)
+        private async Task AppendXlsxWithRetriesAsync(IReadOnlyDictionary<string, string?> fields, CancellationToken ct)
+        {
+            var temp = Path.GetTempFileName() + ".xlsx";
+            try
+            {
+                for (int attempt = 1; attempt <= MaxETagRetries; attempt++)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    var download = await _nextcloudClient.DownloadAsync(_remotePath, ct).ConfigureAwait(false);
+                    
+                    using (var fs = new FileStream(temp, FileMode.Create, FileAccess.Write))
+                    {
+                        await download.Stream.CopyToAsync(fs, ct).ConfigureAwait(false);
+                    }
+                    download.Stream.Dispose();
+
+                    // ClosedXML to append a row
+                    using (var workbook = new XLWorkbook(temp))
+                    {
+                        var worksheet = workbook.Worksheets.First();
+                        var lastRow = worksheet.LastRowUsed()?.RowNumber() ?? 0;
+                        var nextRow = lastRow + 1;
+
+                        if (lastRow == 0)
+                        {
+                            throw new InvalidOperationException($"XLSX file '{_remotePath}' is empty; expected a header row.");
+                        }
+
+                        // Get header from the first row
+                        var headerRow = worksheet.Row(1);
+                        var columnCount = headerRow.LastCellUsed()?.Address.ColumnNumber ?? 0;
+                        
+                        // Copy row height from last row
+                        worksheet.Row(nextRow).Height = worksheet.Row(lastRow).Height;
+
+                        for (int col = 1; col <= columnCount; col++)
+                        {
+                            var colName = headerRow.Cell(col).GetString();
+                            if (fields.TryGetValue(colName, out var value))
+                            {
+                                var cell = worksheet.Cell(nextRow, col);
+                                cell.Value = value;
+                                // Copy style from the cell above (lastRow)
+                                cell.Style = worksheet.Cell(lastRow, col).Style;
+                            }
+                        }
+
+                        // Expand existing tables if they cover the previous last row
+                        foreach (var table in worksheet.Tables)
+                        {
+                            var tableRange = table.RangeAddress;
+                            if (tableRange.LastAddress.RowNumber == lastRow)
+                            {
+                                // Resize the table to include the new row
+                                table.Resize(worksheet.Range(
+                                    tableRange.FirstAddress.RowNumber,
+                                    tableRange.FirstAddress.ColumnNumber,
+                                    nextRow,
+                                    tableRange.LastAddress.ColumnNumber));
+                            }
+                        }
+
+                        workbook.Save();
+                    }
+
+                    using var uploadStream = new FileStream(temp, FileMode.Open, FileAccess.Read);
+
+                    try
+                    {
+                        await _nextcloudClient.UploadAsync(
+                            remotePath: _remotePath,
+                            content: uploadStream,
+                            ifMatchETag: download.ETag,
+                            failIfExists: false,
+                            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            cancellationToken: ct).ConfigureAwait(false);
+                        return;
+                    }
+                    catch (ETagConflictException) when (attempt < MaxETagRetries)
+                    {
+                        await Task.Delay(50 * attempt, ct).ConfigureAwait(false);
+                    }
+                }
+
+                throw new InvalidOperationException($"Failed to append XLSX row to '{_remotePath}' due to repeated ETag conflicts.");
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
+        private async Task AppendCsvWithRetriesAsync(IReadOnlyDictionary<string, string?> fields, CancellationToken ct)
         {
             for (int attempt = 1; attempt <= MaxETagRetries; attempt++)
             {
